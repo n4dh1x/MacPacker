@@ -26,7 +26,8 @@ extension AllCoreTests {
 
         @Test func oneClickExtractionHasNoLaunchWindowsAndQuitsWhenDone() {
             var launch = Launch()
-            #expect(!launch.started(for: .oneClickExtraction))
+            let shown = launch.started(for: .oneClickExtraction)
+            #expect(!shown)
             #expect(!launch.checksForUpdates(usedAsApp: false))
             #expect(launch.checksForUpdates(usedAsApp: true))
             #expect(launch.isOver(usedAsApp: false, actionUnderWay: false, somethingOnScreen: false))

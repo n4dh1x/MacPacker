@@ -46,6 +46,18 @@ jobs:
           echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
           xcodebuild -version
           swift --version
+          toolchain_hash=$(xcodebuild -version | shasum -a 256 | cut -c 1-12)
+          echo "TOOLCHAIN_HASH=$toolchain_hash" >> "$GITHUB_ENV"
+
+      - name: Restore build caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            Modules/.build
+            ${{ runner.temp }}/MacPackerBuild
+          key: fork-build-${{ runner.os }}-${{ runner.arch }}-${{ env.TOOLCHAIN_HASH }}-${{ hashFiles('Modules/Package.resolved', 'MacPacker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            fork-build-${{ runner.os }}-${{ runner.arch }}-${{ env.TOOLCHAIN_HASH }}-${{ hashFiles('Modules/Package.resolved', 'MacPacker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-
 
       - name: Install the test archive reader
         run: bash .ci/install-sevenzip.sh
@@ -152,3 +164,12 @@ jobs:
             ${{ runner.temp }}/app-build.log
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Save build caches for subsequent runs
+        if: ${{ !cancelled() && env.TOOLCHAIN_HASH != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Modules/.build
+            ${{ runner.temp }}/MacPackerBuild
+          key: fork-build-${{ runner.os }}-${{ runner.arch }}-${{ env.TOOLCHAIN_HASH }}-${{ hashFiles('Modules/Package.resolved', 'MacPacker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
