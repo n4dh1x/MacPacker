@@ -1,0 +1,175 @@
+name: Build Fork Prerelease
+
+on:
+  push:
+    branches: [feat/one-click-extraction]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional tag (blank creates a unique build tag)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    if: github.repository == 'n4dh1x/MacPacker'
+    runs-on: macos-26-intel
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      REQUESTED_TAG: ${{ inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Choose a new prerelease tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="${REQUESTED_TAG:-one-click-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}}"
+          git check-ref-format "refs/tags/$release_tag"
+          if git show-ref --verify --quiet "refs/tags/$release_tag"; then
+            echo "::error::The requested tag already exists. Choose a new tag."
+            exit 1
+          fi
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          xcodebuild -version
+          swift --version
+          toolchain_hash=$(xcodebuild -version | shasum -a 256 | cut -c 1-12)
+          echo "TOOLCHAIN_HASH=$toolchain_hash" >> "$GITHUB_ENV"
+
+      - name: Restore build caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            Modules/.build
+            ${{ runner.temp }}/MacPackerBuild
+          key: fork-build-${{ runner.os }}-${{ runner.arch }}-${{ env.TOOLCHAIN_HASH }}-${{ hashFiles('Modules/Package.resolved', 'MacPacker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
+          restore-keys: |
+            fork-build-${{ runner.os }}-${{ runner.arch }}-${{ env.TOOLCHAIN_HASH }}-${{ hashFiles('Modules/Package.resolved', 'MacPacker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-
+
+      - name: Install the test archive reader
+        run: bash .ci/install-sevenzip.sh
+
+      - name: Run package tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test --package-path Modules 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+
+      - name: Build the universal app with ad-hoc signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This fork is downloaded from GitHub Releases. Its updater must not
+          # replace it with an upstream build that lacks the branch's features.
+          /usr/libexec/PlistBuddy -c 'Add :SUEnableAutomaticChecks bool false' MacPacker/Info.plist
+          /usr/libexec/PlistBuddy -c 'Add :SUAllowsAutomaticUpdates bool false' MacPacker/Info.plist
+          xcodebuild \
+            -project MacPacker.xcodeproj \
+            -scheme MacPacker \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/MacPackerBuild" \
+            'ARCHS=arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            BUNDLE_ID_SUFFIX=.fork \
+            APP_URL_SCHEME=app.macpacker.fork \
+            APP_GROUP_ID=UNSIGNED00.com.n4dh1x.MacPacker \
+            build 2>&1 | tee "$RUNNER_TEMP/app-build.log"
+
+      - name: Verify the app and package the download
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/MacPackerBuild/Build/Products/Release/MacPacker.app"
+          bash scripts/check-architectures.sh "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent "$app" dist/MacPacker.zip
+          (cd dist && shasum -a 256 MacPacker.zip > SHA256SUMS.txt)
+
+      - name: Save Xcode-generated localization catalogs
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -- \
+            MacPacker/Localizable.xcstrings \
+            MacPacker/LeanBytes.xcstrings \
+            Modules/Sources/Core/Localizable.xcstrings \
+            Modules/Sources/ArchivePreviewUI/Localizable.xcstrings
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'lang: save Xcode-generated localization strings'
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+          echo "RELEASE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Publish the GitHub prerelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          One-click archive extraction from Settings → General:
+          - Extract beside the archive.
+          - Extract into a folder named after the archive.
+          - Ask for an extraction location.
+
+          Built from branch \`$GITHUB_REF_NAME\`, commit \`$RELEASE_COMMIT\`.
+          Universal app for Apple silicon and Intel; requires macOS 14.6 or later.
+
+          This is an unofficial fork build with ad-hoc signing. It is not signed
+          with an Apple Developer ID or notarized by Apple. macOS may require
+          approval in System Settings → Privacy & Security on first launch.
+          Automatic upstream updates are disabled for this build.
+
+          Download MacPacker.zip below, unzip it, and move MacPacker.app to Applications.
+          SHA256SUMS.txt contains the download's SHA-256 checksum.
+
+          Package tests, the Release app build, universal architecture checks,
+          and code-signature verification passed in
+          $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            dist/MacPacker.zip dist/SHA256SUMS.txt \
+            --target "$RELEASE_COMMIT" \
+            --title "One-click extraction — $RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --prerelease \
+            --latest=false
+
+      - name: Keep build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-build-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/swift-test.log
+            ${{ runner.temp }}/app-build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Save build caches for subsequent runs
+        if: ${{ !cancelled() && env.TOOLCHAIN_HASH != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Modules/.build
+            ${{ runner.temp }}/MacPackerBuild
+          key: fork-build-${{ runner.os }}-${{ runner.arch }}-${{ env.TOOLCHAIN_HASH }}-${{ hashFiles('Modules/Package.resolved', 'MacPacker.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}-${{ github.sha }}
