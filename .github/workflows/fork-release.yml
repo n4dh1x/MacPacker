@@ -15,12 +15,12 @@ permissions:
 
 concurrency:
   group: fork-release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-release:
     if: github.repository == 'n4dh1x/MacPacker'
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ github.token }}
