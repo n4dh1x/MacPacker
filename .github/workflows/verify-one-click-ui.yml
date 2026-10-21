@@ -1,0 +1,66 @@
+name: Verify One-click UI
+
+on:
+  push:
+    branches: [feat/one-click-extraction]
+    paths:
+      - 'MacPackerUITests/**'
+      - '.github/workflows/verify-one-click-ui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    if: github.repository == 'n4dh1x/MacPacker'
+    runs-on: macos-26-intel
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [before, after]
+    env:
+      REVISION: ${{ matrix.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Restore original app for the before screenshot
+        if: matrix.revision == 'before'
+        run: git restore --source=4e6097325ec3d3fc8da119ee54795d35751e7f3c --staged --worktree MacPacker Modules/Sources
+      - name: Build and exercise the macOS UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(-only-testing:MacPackerUITests/MacPackerUITests/testCaptureGeneralSettings)
+          if [[ "$REVISION" == after ]]; then
+            for test in testOneClickExtractsBesideArchive testOneClickExtractsIntoArchiveNamedFolder testOneClickAsksForDestination testCancellingOneClickDestinationLeavesArchiveUntouched testOneClickDisabledOpensArchiveBrowser; do
+              tests+=("-only-testing:MacPackerUITests/MacPackerUITests/$test")
+            done
+          fi
+          xcodebuild -project MacPacker.xcodeproj -scheme MacPacker \
+            -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/MacPackerUI" \
+            -resultBundlePath "$RUNNER_TEMP/ui-$REVISION.xcresult" \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            APP_GROUP_ID=UNSIGNED00.com.n4dh1x.MacPacker.debug \
+            "${tests[@]}" test 2>&1 | tee "$RUNNER_TEMP/ui-$REVISION.log"
+      - name: Export screenshots
+        if: always()
+        run: |
+          if [[ -d "$RUNNER_TEMP/ui-$REVISION.xcresult" ]]; then
+            xcrun xcresulttool export attachments \
+              --path "$RUNNER_TEMP/ui-$REVISION.xcresult" \
+              --output-path "$RUNNER_TEMP/screenshots-$REVISION"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: one-click-ui-${{ matrix.revision }}
+          path: |
+            ${{ runner.temp }}/ui-${{ matrix.revision }}.log
+            ${{ runner.temp }}/screenshots-${{ matrix.revision }}
+          retention-days: 30

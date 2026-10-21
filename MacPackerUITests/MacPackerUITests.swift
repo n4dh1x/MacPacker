@@ -126,6 +126,19 @@ final class MacPackerUITests: XCTestCase {
         return app
     }
 
+    func testCaptureGeneralSettings() {
+        let app = launchApp(arguments: ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+                                        "-oneClickExtraction", "YES", "-\(quitOnLastWindowClosedKey)", "NO"])
+        defer { app.terminate() }
+        app.typeKey(",", modifierFlags: .command)
+        let general = app.buttons["General"].firstMatch
+        if general.waitForExistence(timeout: 5) { general.click() }
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "General Settings"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testOneClickExtractsBesideArchive() throws {
         let directory = try makeWorkDir("one-click-here")
         defer { try? FileManager.default.removeItem(at: directory) }
