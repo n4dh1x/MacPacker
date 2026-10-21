@@ -58,5 +58,47 @@ extension AllCoreTests {
             #expect(detector.detect(for: archive) != nil)
             #expect(OneClickExtractionDestination.archiveFolder.directory(for: archive, detector: detector)?.lastPathComponent == "Photos (2)")
         }
+
+        @MainActor @Test(arguments: ZipReader.allCases, [false, true])
+        func extractionPreservesExistingOutput(reader: ZipReader, fileBlockedByDirectory: Bool) async throws {
+            let fm = FileManager.default
+            let destination = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try fm.createDirectory(at: destination, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: destination) }
+
+            let marker = Data("keep existing output".utf8)
+            let existing = destination.appendingPathComponent("hello world.txt")
+            if fileBlockedByDirectory {
+                try fm.createDirectory(at: existing, withIntermediateDirectories: true)
+                try marker.write(to: existing.appendingPathComponent("keep.txt"))
+            } else {
+                try marker.write(to: existing)
+            }
+            try marker.write(to: destination.appendingPathComponent("hello world (2).txt"))
+            // An archive directory can also be blocked by an existing file.
+            try marker.write(to: destination.appendingPathComponent("folder"))
+
+            let fixture = try #require(Bundle.module.url(forResource: "defaultArchives", withExtension: nil))
+                .appendingPathComponent("defaultArchive.zip")
+            let content = try #require(Bundle.module.url(forResource: "defaultArchiveContent", withExtension: nil))
+            let state = ArchiveState(catalog: ArchiveTypeCatalog(), engineSelector: reader.selector)
+            state.progressCenter = ExtractionProgressCenter()
+            state.open(url: fixture)
+            try await state.openTask?.value
+            await withCheckedContinuation { continuation in
+                state.onStatusChange = { status in
+                    if status == .done { continuation.resume() }
+                }
+                state.extract(to: destination, smart: false)
+            }
+            try #require(state.error == nil, "Extraction failed: \(state.error ?? "")")
+
+            #expect(try Data(contentsOf: fileBlockedByDirectory ? existing.appendingPathComponent("keep.txt") : existing) == marker)
+            #expect(try Data(contentsOf: destination.appendingPathComponent("hello world (2).txt")) == marker)
+            #expect(try Data(contentsOf: destination.appendingPathComponent("folder")) == marker)
+            #expect(try Data(contentsOf: destination.appendingPathComponent("hello world (3).txt")) == Data(contentsOf: content.appendingPathComponent("hello world.txt")))
+            #expect(try Data(contentsOf: destination.appendingPathComponent("folder (2)/README.md")) == Data(contentsOf: content.appendingPathComponent("folder/README.md")))
+            #expect(try Data(contentsOf: destination.appendingPathComponent("folder (2)/NestedArchive.zip")) == Data(contentsOf: content.appendingPathComponent("folder/NestedArchive.zip")))
+        }
     }
 }

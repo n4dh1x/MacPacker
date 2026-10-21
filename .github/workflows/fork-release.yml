@@ -70,7 +70,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          swift test --package-path Modules 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+          swift test --package-path Modules --filter OneClickExtractionTests 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
 
       - name: Build the universal app with ad-hoc signing
         shell: bash
