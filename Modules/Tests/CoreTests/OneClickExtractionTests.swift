@@ -75,6 +75,8 @@ extension AllCoreTests {
                 try marker.write(to: existing)
             }
             try marker.write(to: destination.appendingPathComponent("hello world (2).txt"))
+            let danglingLink = destination.appendingPathComponent("hello world (3).txt")
+            try fm.createSymbolicLink(atPath: danglingLink.path, withDestinationPath: "missing.txt")
             // An archive directory can also be blocked by an existing file.
             try marker.write(to: destination.appendingPathComponent("folder"))
 
@@ -89,16 +91,18 @@ extension AllCoreTests {
                 state.onStatusChange = { status in
                     if status == .done { continuation.resume() }
                 }
-                state.extract(to: destination, smart: false)
+                state.extract(to: destination, smart: false, preservingExistingFiles: true)
             }
             try #require(state.error == nil, "Extraction failed: \(state.error ?? "")")
 
             #expect(try Data(contentsOf: fileBlockedByDirectory ? existing.appendingPathComponent("keep.txt") : existing) == marker)
             #expect(try Data(contentsOf: destination.appendingPathComponent("hello world (2).txt")) == marker)
+            #expect(try fm.destinationOfSymbolicLink(atPath: danglingLink.path) == "missing.txt")
             #expect(try Data(contentsOf: destination.appendingPathComponent("folder")) == marker)
-            #expect(try Data(contentsOf: destination.appendingPathComponent("hello world (3).txt")) == Data(contentsOf: content.appendingPathComponent("hello world.txt")))
+            #expect(try Data(contentsOf: destination.appendingPathComponent("hello world (4).txt")) == Data(contentsOf: content.appendingPathComponent("hello world.txt")))
             #expect(try Data(contentsOf: destination.appendingPathComponent("folder (2)/README.md")) == Data(contentsOf: content.appendingPathComponent("folder/README.md")))
             #expect(try Data(contentsOf: destination.appendingPathComponent("folder (2)/NestedArchive.zip")) == Data(contentsOf: content.appendingPathComponent("folder/NestedArchive.zip")))
+            #expect(try fm.contentsOfDirectory(atPath: destination.path).allSatisfy { !$0.hasPrefix(".MacPacker-extract-") })
         }
     }
 }

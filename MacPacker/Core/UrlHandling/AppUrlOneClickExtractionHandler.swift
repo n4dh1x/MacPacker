@@ -58,7 +58,8 @@ final class AppUrlOneClickExtractionHandler: AppUrlHandler {
             // These destinations are explicit: Smart Extraction must not move
             // same-folder output or add another container inside a named folder.
             let output = await extractArchive(
-                archive, into: folder, smart: false, catalog: catalog, engineSelector: engineSelector)
+                archive, into: folder, smart: false, preservingExistingFiles: true,
+                catalog: catalog, engineSelector: engineSelector)
             if destination == .archiveFolder, !output.isEmpty {
                 extracted.append(folder)
             } else {

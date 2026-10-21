@@ -55,6 +55,7 @@ extension AppUrlHandler {
         _ archive: URL,
         into destination: URL,
         smart: Bool,
+        preservingExistingFiles: Bool = false,
         catalog: ArchiveTypeCatalog,
         engineSelector: ArchiveEngineSelectorProtocol
     ) async -> [URL] {
@@ -75,10 +76,11 @@ extension AppUrlHandler {
 
         // extract(to:) raises isBusy before it returns and lowers it once the
         // job ends — done, cancelled or failed
-        state.extract(to: destination, smart: smart)
+        state.extract(to: destination, smart: smart, preservingExistingFiles: preservingExistingFiles)
         for await busy in state.$isBusy.values where !busy {
             break
         }
+        guard state.error == nil else { return [] }
 
         let added = folderContents(destination).filter { !before.contains($0) }
         if !added.isEmpty {
